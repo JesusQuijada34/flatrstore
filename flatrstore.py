@@ -9,17 +9,19 @@ import zipfile
 import html
 import threading
 import hashlib
+import platform
 from pathlib import Path
 from xml.etree import ElementTree as ET
 from functools import partial
+from datetime import datetime, timedelta
 
 from PyQt5 import QtCore, QtGui, QtWidgets
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize
-from PyQt5.QtGui import QPixmap, QIcon, QFontDatabase, QFont
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QSize, QTimer
+from PyQt5.QtGui import QPixmap, QIcon, QFontDatabase, QFont, QColor, QPalette
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QMainWindow, QLabel, QLineEdit, QPushButton,
     QHBoxLayout, QVBoxLayout, QMessageBox, QToolButton, QScrollArea,
-    QGridLayout, QComboBox, QProgressBar, QFrame
+    QGridLayout, QComboBox, QProgressBar, QFrame, QSystemTrayIcon, QMenu, QStyle
 )
 
 try:
@@ -39,19 +41,21 @@ RAW_LIST_URL = "https://raw.githubusercontent.com/JesusQuijada34/catalog/refs/he
 RAW_BASE = "https://raw.githubusercontent.com/JesusQuijada34"
 GITHUB_BASE = "https://github.com/JesusQuijada34"
 HOME = Path.home()
-INSTALL_BASE = HOME / "Documents" / "Flatr Apps"
+INSTALL_BASE = HOME / "Documents" / "Flatr Apps" if platform.system() != "Windows" else Path(os.getenv('APPDATA')) / "Flatr" / "Apps"
 CACHE_DIR = HOME / ".flatr_store_cache"
 ICON_CACHE_DIR = CACHE_DIR / "icons"
 ICON_INDEX_FILE = ICON_CACHE_DIR / "index.json"
+VERSION_CHECK_INTERVAL = 20 * 60 * 1000  # 20 minutos en milisegundos
 CACHE_DIR.mkdir(parents=True, exist_ok=True)
 ICON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 ROBOTO_TTF_URL = "https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Regular.ttf"
+OFFLINE_ICON_PATH = Path(__file__).parent / "app" / "app-icon.ico" #"offline-icon.ico"
 
 # ----------------------------
-# THEME QSS (Modern and clean)
+# THEME QSS
 # ----------------------------
-APP_QSS = r"""
+APP_QSS_DARK = r"""
 /* Main window background */
 QMainWindow {
     background-color: #2d2d2d;
@@ -185,6 +189,164 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
     background: none;
 }
+
+/* Offline mode */
+#OfflineMode {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #404040, stop:1 #202020);
+}
+
+#OfflineLabel {
+    color: #aaaaaa;
+    font-size: 16pt;
+    qproperty-alignment: AlignCenter;
+}
+"""
+
+APP_QSS_LIGHT = r"""
+/* Main window background */
+QMainWindow {
+    background-color: #f5f5f5;
+    color: #333333;
+}
+
+/* Header */
+#TopHeader {
+    background: #e0e0e0;
+    color: #333333;
+    font-weight: 700;
+    padding: 10px;
+    border-bottom: 1px solid #cccccc;
+}
+
+/* Search and controls */
+QLineEdit {
+    background: #ffffff;
+    border: 1px solid #cccccc;
+    padding: 6px 8px;
+    border-radius: 4px;
+    color: #333333;
+    selection-background-color: #4a6da7;
+}
+
+QComboBox {
+    background: #ffffff;
+    border: 1px solid #cccccc;
+    padding: 4px 8px;
+    border-radius: 4px;
+    color: #333333;
+}
+
+QComboBox QAbstractItemView {
+    background: #ffffff;
+    color: #333333;
+    selection-background-color: #4a6da7;
+    border: 1px solid #cccccc;
+}
+
+/* App buttons */
+QPushButton#appButton {
+    background-color: #ffffff;
+    border: 1px solid #cccccc;
+    border-radius: 6px;
+    padding: 5px;
+    color: #333333;
+}
+
+QPushButton#appButton:hover {
+    background-color: #f0f0f0;
+    border: 1px solid #bbbbbb;
+}
+
+QPushButton#appButton:pressed {
+    background-color: #e0e0e0;
+    border: 1px solid #aaaaaa;
+}
+
+/* Big action buttons */
+QPushButton {
+    background: #4a6da7;
+    color: #ffffff;
+    border-radius: 4px;
+    padding: 8px 12px;
+    border: 1px solid #3a5a8a;
+    font-weight: 600;
+}
+
+QPushButton:hover {
+    background: #5a7db7;
+}
+
+QPushButton:pressed {
+    background: #3a5a97;
+}
+
+/* Progress bar */
+QProgressBar {
+    border: 1px solid #cccccc;
+    border-radius: 4px;
+    text-align: center;
+    background: #ffffff;
+    color: #333333;
+}
+
+QProgressBar::chunk {
+    background: #4a6da7;
+    border-radius: 4px;
+}
+
+/* Custom MessageBox */
+QMessageBox {
+    background: #ffffff;
+    color: #333333;
+    border: 1px solid #cccccc;
+}
+
+QMessageBox QLabel {
+    color: #333333;
+}
+
+QMessageBox QPushButton {
+    min-width: 90px;
+    padding: 6px;
+}
+
+/* Scroll area */
+QScrollArea {
+    border: none;
+    background: transparent;
+}
+
+QScrollBar:vertical {
+    border: none;
+    background: #f5f5f5;
+    width: 10px;
+    margin: 0px 0px 0px 0px;
+}
+
+QScrollBar::handle:vertical {
+    background: #cccccc;
+    min-height: 20px;
+    border-radius: 4px;
+}
+
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+    background: none;
+}
+
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
+    background: none;
+}
+
+/* Offline mode */
+#OfflineMode {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e0e0e0, stop:1 #c0c0c0);
+}
+
+#OfflineLabel {
+    color: #666666;
+    font-size: 16pt;
+    qproperty-alignment: AlignCenter;
+}
 """
 
 # ----------------------------
@@ -233,7 +395,7 @@ def parse_details_xml(xml_text: str):
 
 def installed_version_for(info: dict):
     pub = safe_name(info.get("publisher") or "unknown")
-    nm = safe_name(info.get("name") or info.get("repo"))
+    nm = safe_name(info.get("app") or info.get("name") or info.get("repo"))
     versions = list(INSTALL_BASE.glob(f"{pub}.{nm}.*"))
     if not versions:
         return None, None
@@ -288,11 +450,6 @@ def icon_hash(data: bytes) -> str:
     return hashlib.sha1(data).hexdigest()
 
 def save_icon_to_cache_unique(repo: str, publisher: str, name: str, version: str, content: bytes):
-    """
-    Guarda icono con nombre {publisher}.{app}.{version}.ico
-    Evita duplicados: usa index por hash -> filename.
-    Devuelve path (str) y hash.
-    """
     if not content:
         return None, None
     h = icon_hash(content)
@@ -301,7 +458,6 @@ def save_icon_to_cache_unique(repo: str, publisher: str, name: str, version: str
         return idx[h], h
     fname = f"{safe_name(publisher)}.{safe_name(name)}.{safe_name(version)}.ico"
     path = ICON_CACHE_DIR / fname
-    # si archivo ya existe con otro hash, añadir sufijo
     if path.exists():
         base = path.stem
         i = 1
@@ -330,6 +486,29 @@ def load_icon_bytes(path_str):
     except Exception:
         pass
     return None
+
+def create_windows_shortcut(target_path, shortcut_name, description="", icon_path=None):
+    if platform.system() != "Windows":
+        return False
+
+    try:
+        import winshell
+        from win32com.client import Dispatch
+
+        desktop = winshell.desktop()
+        shortcut_path = os.path.join(desktop, f"{shortcut_name}.lnk")
+
+        shell = Dispatch('WScript.Shell')
+        shortcut = shell.CreateShortCut(shortcut_path)
+        shortcut.Targetpath = str(target_path)
+        shortcut.WorkingDirectory = str(target_path.parent)
+        shortcut.Description = description
+        if icon_path:
+            shortcut.IconLocation = str(icon_path)
+        shortcut.save()
+        return True
+    except Exception:
+        return False
 
 # ----------------------------
 # CONNECTIVITY
@@ -372,18 +551,16 @@ class RepoFetchThread(QThread):
             results = []
             total = max(1, len(repos))
 
-            # Primero recolectamos toda la información
             for i, repo in enumerate(repos, start=1):
                 item = self._fetch_repo_info(repo)
                 if item:
                     results.append(item)
                 self.progress.emit(10 + int(80 * (i / total)))
 
-            # Eliminar duplicados basados en nombre y publisher
             unique_results = []
             seen_keys = set()
             for item in results:
-                key = (item.get("name", ""), item.get("publisher", ""))
+                key = (item.get("app") or item.get("name", ""), item.get("publisher", ""))
                 if key not in seen_keys and key != ("", ""):
                     seen_keys.add(key)
                     unique_results.append(item)
@@ -395,86 +572,78 @@ class RepoFetchThread(QThread):
             self.error.emit(str(e))
 
     def _fetch_repo_info(self, repo):
-        name = repo
-        publisher = ""
-        version = ""
-        icon_bytes = None
-        readme_text = ""
-        xml_text = ""
+        try:
+            # Fetch details.xml first
+            details_url = f"{RAW_BASE}/{repo}/main/details.xml"
+            details_response = requests.get(details_url, timeout=8)
+            details_xml = details_response.text if details_response.ok else ""
 
-        # details.xml
-        try_urls = [
-            f"https://raw.githubusercontent.com/JesusQuijada34/{repo}/main/details.xml",
-        ]
-        for u in try_urls:
-            try:
-                rr = requests.get(u, timeout=8)
-                if rr.ok and rr.text.strip():
-                    xml_text = rr.text
-                    break
-            except Exception:
-                pass
+            parsed = parse_details_xml(details_xml)
+            app_name = parsed.get("app") or parsed.get("name") or repo.split("/")[-1]
+            publisher = parsed.get("publisher") or "unknown"
+            version = parsed.get("version") or "0.0.0"
 
-        parsed = parse_details_xml(xml_text)
-        if parsed.get("name"):
-            name = parsed.get("name")
-        publisher = parsed.get("publisher") or ""
-        version = parsed.get("version") or ""
+            # Fetch README
+            readme_urls = [
+                f"{RAW_BASE}/{repo}/main/README.md",
+                f"{RAW_BASE}/{repo}/main/readme.md"
+            ]
+            readme_text = ""
+            for url in readme_urls:
+                try:
+                    readme_response = requests.get(url, timeout=6)
+                    if readme_response.ok:
+                        readme_text = readme_response.text
+                        break
+                except Exception:
+                    pass
 
-        # readme
-        for ru in [
-            f"https://raw.githubusercontent.com/JesusQuijada34/{repo}/main/README.md",
-            f"https://raw.githubusercontent.com/JesusQuijada34/{repo}/main/readme.md",
-        ]:
-            try:
-                rr = requests.get(ru, timeout=6)
-                if rr.ok and rr.text.strip():
-                    readme_text = rr.text
-                    break
-            except Exception:
-                pass
+            # Fetch icon
+            icon_urls = [
+                f"{RAW_BASE}/{repo}/main/app/app-icon.ico",
+            ]
+            icon_bytes = None
+            for url in icon_urls:
+                try:
+                    icon_response = requests.get(url, timeout=6)
+                    if icon_response.ok and icon_response.content:
+                        icon_bytes = icon_response.content
+                        break
+                except Exception:
+                    pass
 
-        # icons
-        for url in [
-            f"https://raw.githubusercontent.com/JesusQuijada34/{repo}/main/app/app-icon.ico",
-        ]:
-            try:
-                ricon = requests.get(url, timeout=6)
-                if ricon.ok and ricon.content:
-                    icon_bytes = ricon.content
-                    break
-            except Exception:
-                pass
+            icon_cache_path, icon_h = None, None
+            if icon_bytes:
+                icon_cache_path, icon_h = save_icon_to_cache_unique(
+                    repo, publisher, app_name, version, icon_bytes)
 
-        icon_cache_path, icon_h = None, None
-        if icon_bytes:
-            icon_cache_path, icon_h = save_icon_to_cache_unique(
-                repo, publisher or "unknown", name or repo, version or "0.0.0", icon_bytes)
+            item = {
+                "repo": repo,
+                "app": app_name,
+                "name": parsed.get("name") or app_name,
+                "publisher": publisher,
+                "version": version,
+                "icon_cache_path": icon_cache_path,
+                "icon_hash": icon_h,
+                "readme": readme_text,
+                "details_xml": details_xml,
+            }
 
-        item = {
-            "repo": repo,
-            "name": name,
-            "publisher": publisher,
-            "version": version,
-            "icon_cache_path": icon_cache_path,
-            "icon_hash": icon_h,
-            "readme": readme_text,
-            "details_xml": xml_text,
-        }
+            iv, dest = installed_version_for(item)
+            item["installed_version"] = iv
+            item["installed_path"] = str(dest) if dest else None
+            item["update_available"] = False
+            if iv and version and (iv != version):
+                item["update_available"] = True
 
-        iv, dest = installed_version_for(item)
-        item["installed_version"] = iv
-        item["installed_path"] = str(dest) if dest else None
-        item["update_available"] = False
-        if iv and version and (iv != version):
-            item["update_available"] = True
-
-        return item
+            return item
+        except Exception:
+            return None
 
 class InstallThread(QThread):
     progress = pyqtSignal(int)
     status = pyqtSignal(str)
-    finished_install = pyqtSignal(bool, str)
+    finished_install = pyqtSignal(bool, str, dict)  # Added info dict to return
 
     def __init__(self, info: dict, parent=None):
         super().__init__(parent)
@@ -488,9 +657,9 @@ class InstallThread(QThread):
         try:
             ensure_install_base()
             pub = safe_name(self.info.get("publisher") or "unknown")
-            nm = safe_name(self.info.get("name") or self.info.get("repo"))
+            app_name = safe_name(self.info.get("app") or self.info.get("repo"))
             ver = safe_name(self.info.get("version") or "0.0.0")
-            dest = INSTALL_BASE / f"{pub}.{nm}.{ver}"
+            dest = INSTALL_BASE / f"{pub}.{app_name}.{ver}"
             zip_url = f"{GITHUB_BASE}/{self.info['repo']}/archive/refs/heads/main.zip"
 
             self.status.emit("Descargando...")
@@ -498,7 +667,7 @@ class InstallThread(QThread):
             try:
                 r = requests.get(zip_url, stream=True, timeout=30)
                 if r.status_code != 200:
-                    self.finished_install.emit(False, f"HTTP {r.status_code} al descargar ZIP")
+                    self.finished_install.emit(False, f"HTTP {r.status_code} al descargar ZIP", self.info)
                     return
 
                 total = int(r.headers.get("content-length", 0) or 0)
@@ -510,7 +679,7 @@ class InstallThread(QThread):
                 with open(path, "wb") as fdobj:
                     for data in r.iter_content(chunk_size=chunk):
                         if self._cancelled:
-                            self.finished_install.emit(False, "Cancelado")
+                            self.finished_install.emit(False, "Cancelado", self.info)
                             try:
                                 fdobj.close()
                             except Exception:
@@ -557,6 +726,7 @@ class InstallThread(QThread):
                                 target.unlink()
                         shutil.move(str(child), str(target))
 
+                # Save metadata
                 details_xml = self.info.get("details_xml")
                 if details_xml:
                     try:
@@ -571,8 +741,32 @@ class InstallThread(QThread):
                     except Exception:
                         pass
 
+                # Create Windows shortcut if applicable
+                if platform.system() == "Windows":
+                    main_script = None
+                    for ext in [".py", ".exe", ".bat"]:
+                        candidate = dest / f"{app_name}{ext}"
+                        if candidate.exists():
+                            main_script = candidate
+                            break
+
+                    if main_script:
+                        icon_path = None
+                        for icon_file in ["app-icon.ico", "icon.ico"]:
+                            candidate = dest / "app" / icon_file
+                            if candidate.exists():
+                                icon_path = candidate
+                                break
+
+                        create_windows_shortcut(
+                            main_script,
+                            self.info.get("name") or app_name,
+                            self.info.get("name") or app_name,
+                            icon_path
+                        )
+
                 self.progress.emit(100)
-                self.finished_install.emit(True, f"Instalado en: {dest}")
+                self.finished_install.emit(True, f"Instalado en: {dest}", self.info)
             finally:
                 try:
                     if tmp_file and tmp_file.exists():
@@ -585,7 +779,52 @@ class InstallThread(QThread):
                 except Exception:
                     pass
         except Exception as e:
-            self.finished_install.emit(False, f"Error: {e}")
+            self.finished_install.emit(False, f"Error: {e}", self.info)
+
+class VersionCheckThread(QThread):
+    update_available = pyqtSignal(dict)
+    no_updates = pyqtSignal()
+
+    def __init__(self, repo_list, parent=None):
+        super().__init__(parent)
+        self.repo_list = repo_list
+        self._cancelled = False
+
+    def cancel(self):
+        self._cancelled = True
+
+    def run(self):
+        try:
+            updates_found = False
+            for info in self.repo_list:
+                if self._cancelled:
+                    return
+
+                # Skip if not installed
+                if not info.get("installed_version"):
+                    continue
+
+                # Fetch current version from repo
+                try:
+                    details_url = f"{RAW_BASE}/{info['repo']}/main/details.xml"
+                    details_response = requests.get(details_url, timeout=10)
+                    if details_response.ok:
+                        parsed = parse_details_xml(details_response.text)
+                        remote_version = parsed.get("version")
+
+                        if remote_version and remote_version != info.get("installed_version"):
+                            updates_found = True
+                            new_info = info.copy()
+                            new_info["version"] = remote_version
+                            new_info["update_available"] = True
+                            self.update_available.emit(new_info)
+                except Exception:
+                    continue
+
+            if not updates_found:
+                self.no_updates.emit()
+        except Exception:
+            self.no_updates.emit()
 
 # ----------------------------
 # UI: App Button and Detail Dialog
@@ -607,32 +846,31 @@ class AppButton(QPushButton):
         self.icon_label.setAlignment(Qt.AlignCenter)
         self.set_icon()
 
-        self.name_label = QLabel(info.get("name") or info.get("repo"))
+        self.name_label = QLabel(info.get("name") or info.get("app") or info.get("repo"))
         self.name_label.setAlignment(Qt.AlignCenter)
-        self.name_label.setStyleSheet("color: white; font-size: 10px;")
+        self.name_label.setStyleSheet("font-size: 10px;")
         self.name_label.setWordWrap(True)
 
         layout.addWidget(self.icon_label, 0, Qt.AlignCenter)
         layout.addWidget(self.name_label, 0, Qt.AlignCenter)
         self.setLayout(layout)
 
-        tip = f"{self.info.get('name')}"
-        if self.info.get("publisher"):
-            tip += f"\nPublisher: {self.info.get('publisher')}"
-        if self.info.get("version"):
-            tip += f"\nVersion: {self.info.get('version')}"
-        if self.info.get("installed_version"):
-            tip += f"\nInstalled: {self.info.get('installed_version')}"
-            if self.info.get("update_available"):
-                tip += "\nUpdate available!"
+        # Tooltip with info
+        tip = f"{info.get('name') or info.get('app')}"
+        if info.get("publisher"):
+            tip += f"\nPublicado por: {info['publisher']}"
+        if info.get("version"):
+            tip += f"\nVersión: {info['version']}"
+        if info.get("installed_version"):
+            tip += f"\nInstalado: {info['installed_version']}"
+            if info.get("update_available"):
+                tip += "\n(Actualización disponible)"
         self.setToolTip(tip)
 
     def set_icon(self):
         b = None
         if self.info.get("icon_cache_path"):
             b = load_icon_bytes(self.info.get("icon_cache_path"))
-        if not b and self.info.get("icon_bytes"):
-            b = self.info.get("icon_bytes")
 
         if b:
             pixmap = QPixmap()
@@ -649,7 +887,7 @@ class AppDetailDialog(QtWidgets.QDialog):
     def __init__(self, info: dict, parent=None):
         super().__init__(parent)
         self.info = info
-        self.setWindowTitle(info.get("name") or info.get("repo"))
+        self.setWindowTitle(info.get("name") or info.get("app") or info.get("repo"))
         self.resize(800, 600)
         self.setup_ui()
         self.load_readme()
@@ -667,17 +905,17 @@ class AppDetailDialog(QtWidgets.QDialog):
         self.set_icon()
         icon_layout.addWidget(self.icon_label, 0, Qt.AlignCenter)
 
-        title = QLabel(self.info.get("name") or self.info.get("repo"))
-        title.setStyleSheet("font-size: 16pt; font-weight: bold; color: white;")
+        title = QLabel(self.info.get("name") or self.info.get("app") or self.info.get("repo"))
+        title.setStyleSheet("font-size: 16pt; font-weight: bold;")
         icon_layout.addWidget(title, 0, Qt.AlignCenter)
 
         version = QLabel(f"Versión: {self.info.get('version') or 'Desconocida'}")
-        version.setStyleSheet("color: #aaaaaa;")
+        version.setStyleSheet("color: #666666;")
         icon_layout.addWidget(version, 0, Qt.AlignCenter)
 
         if self.info.get("publisher"):
             publisher = QLabel(f"Publicado por: {self.info.get('publisher')}")
-            publisher.setStyleSheet("color: #aaaaaa;")
+            publisher.setStyleSheet("color: #666666;")
             icon_layout.addWidget(publisher, 0, Qt.AlignCenter)
 
         icon_widget.setLayout(icon_layout)
@@ -720,8 +958,6 @@ class AppDetailDialog(QtWidgets.QDialog):
         b = None
         if self.info.get("icon_cache_path"):
             b = load_icon_bytes(self.info.get("icon_cache_path"))
-        if not b and self.info.get("icon_bytes"):
-            b = self.info.get("icon_bytes")
 
         if b:
             pixmap = QPixmap()
@@ -742,7 +978,8 @@ class AppDetailDialog(QtWidgets.QDialog):
 
         def fetch():
             for ru in [
-                f"https://raw.githubusercontent.com/JesusQuijada34/{self.info['repo']}/main/README.md",
+                f"{RAW_BASE}/{self.info['repo']}/main/README.md",
+                f"{RAW_BASE}/{self.info['repo']}/main/readme.md",
             ]:
                 try:
                     rr = requests.get(ru, timeout=8)
@@ -762,14 +999,15 @@ class AppDetailDialog(QtWidgets.QDialog):
 
     def dest_folder(self) -> Path:
         pub = safe_name(self.info.get("publisher") or "unknown")
-        nm = safe_name(self.info.get("name") or self.info.get("repo"))
+        app_name = safe_name(self.info.get("app") or self.info.get("repo"))
         ver = safe_name(self.info.get("version") or "0.0.0")
-        return INSTALL_BASE / f"{pub}.{nm}.{ver}"
+        return INSTALL_BASE / f"{pub}.{app_name}.{ver}"
 
     def update_install_state(self):
         installed = self.dest_folder().exists()
         self.install_btn.setEnabled(not installed)
         self.uninstall_btn.setEnabled(installed)
+        self.open_folder_btn.setEnabled(installed)
 
     def on_install(self):
         dest = self.dest_folder()
@@ -787,8 +1025,9 @@ class AppDetailDialog(QtWidgets.QDialog):
         self.thread.finished_install.connect(self.on_finished)
         self.thread.start()
 
-    def on_finished(self, ok: bool, msg: str):
+    def on_finished(self, ok: bool, msg: str, info: dict):
         QMessageBox.information(self, "Instalación", msg if ok else f"Error: {msg}")
+        self.info = info
         self.update_install_state()
 
     def on_uninstall(self):
@@ -885,6 +1124,51 @@ class GridView(QWidget):
         dlg = AppDetailDialog(info, parent=self)
         dlg.exec_()
 
+class OfflineMode(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setObjectName("OfflineMode")
+        layout = QVBoxLayout()
+        layout.setAlignment(Qt.AlignCenter)
+
+        # Icon
+        self.icon_label = QLabel()
+        self.icon_label.setAlignment(Qt.AlignCenter)
+        self.set_icon()
+        layout.addWidget(self.icon_label)
+
+        # Message
+        message = QLabel("No hay conexión a internet")
+        message.setObjectName("OfflineLabel")
+        layout.addWidget(message)
+
+        self.setLayout(layout)
+
+    def set_icon(self):
+        if OFFLINE_ICON_PATH.exists():
+            pixmap = QPixmap(str(OFFLINE_ICON_PATH))
+            pixmap = pixmap.scaled(128, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.icon_label.setPixmap(pixmap)
+        else:
+            # Create a simple offline icon
+            pixmap = QPixmap(128, 128)
+            pixmap.fill(Qt.transparent)
+
+            painter = QtGui.QPainter(pixmap)
+            painter.setRenderHint(QtGui.QPainter.Antialiasing)
+            painter.setBrush(QtGui.QBrush(QColor(150, 150, 150)))
+            painter.setPen(Qt.NoPen)
+            painter.drawEllipse(0, 0, 128, 128)
+
+            font = painter.font()
+            font.setPointSize(48)
+            painter.setFont(font)
+            painter.setPen(QColor(80, 80, 80))
+            painter.drawText(pixmap.rect(), Qt.AlignCenter, "!")
+            painter.end()
+
+            self.icon_label.setPixmap(pixmap)
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -892,24 +1176,30 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Flatr Store")
         self.resize(1100, 760)
         self.repo_list = []
+        self.dark_mode = True
+        self.tray_icon = None
         self._setup_ui()
         self._apply_font()
-        QApplication.instance().setStyleSheet(APP_QSS)
+        self._setup_tray_icon()
+        self.setStyleSheet(APP_QSS_DARK)
 
+        # Timer for version checks
+        self.version_check_timer = QTimer(self)
+        self.version_check_timer.setInterval(VERSION_CHECK_INTERVAL)
+        self.version_check_timer.timeout.connect(self.check_for_updates)
+
+        # Initial load
         if not is_connected():
-            dlg = StyledMessageBox(
-                "Sin conexión",
-                "No hay conexión a Internet. Se cargará la caché local si existe.",
-                parent=self)
-            dlg.exec_()
-
-        self.load_cache_then_fetch()
+            self.show_offline_mode()
+        else:
+            self.load_cache_then_fetch()
+            self.version_check_timer.start()
 
     def _setup_ui(self):
         central = QWidget()
-        v = QVBoxLayout()
-        v.setContentsMargins(0, 0, 0, 0)
-        v.setSpacing(0)
+        self.layout = QVBoxLayout()
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(0)
 
         # Header
         header = QFrame()
@@ -917,11 +1207,19 @@ class MainWindow(QMainWindow):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(15, 5, 15, 5)
 
-        title_label = QLabel("Flatr Store")
-        title_label.setStyleSheet("font-size: 16pt; font-weight: bold; color: white;")
-        header_layout.addWidget(title_label)
+        self.title_label = QLabel("Flatr Store")
+        self.title_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
+        header_layout.addWidget(self.title_label)
 
         header_layout.addStretch()
+
+        # Theme toggle button
+        self.theme_btn = QPushButton()
+        self.theme_btn.setFixedSize(30, 30)
+        self.theme_btn.setFlat(True)
+        self.theme_btn.clicked.connect(self.toggle_theme)
+        self.update_theme_icon()
+        header_layout.addWidget(self.theme_btn)
 
         # Search box
         self.search = QLineEdit()
@@ -931,7 +1229,7 @@ class MainWindow(QMainWindow):
         header_layout.addWidget(self.search)
 
         header.setLayout(header_layout)
-        v.addWidget(header)
+        self.layout.addWidget(header)
 
         # Controls row
         controls = QHBoxLayout()
@@ -954,33 +1252,84 @@ class MainWindow(QMainWindow):
         self.progress.setFixedWidth(200)
         controls.addWidget(self.progress)
 
-        v.addLayout(controls)
+        self.layout.addLayout(controls)
+
+        # Main content area
+        self.content_stack = QtWidgets.QStackedWidget()
 
         # Grid view
         self.grid_view = GridView()
-        v.addWidget(self.grid_view, 1)
+        self.content_stack.addWidget(self.grid_view)
+
+        # Offline mode
+        self.offline_mode = OfflineMode()
+        self.content_stack.addWidget(self.offline_mode)
+
+        self.layout.addWidget(self.content_stack, 1)
 
         # Footer
         footer = QFrame()
-        footer.setObjectName("TopHeader")  # Same style as header
+        footer.setObjectName("TopHeader")
         footer_layout = QHBoxLayout()
         footer_layout.setContentsMargins(15, 5, 15, 5)
 
-        status_label = QLabel("Listo")
-        status_label.setStyleSheet("color: #aaaaaa;")
-        footer_layout.addWidget(status_label)
+        self.status_label = QLabel("Listo")
+        self.status_label.setStyleSheet("color: #aaaaaa;")
+        footer_layout.addWidget(self.status_label)
 
         footer_layout.addStretch()
 
-        credit_label = QLabel("© 2025 JesusQuijada34")
-        credit_label.setStyleSheet("color: #aaaaaa;")
-        footer_layout.addWidget(credit_label)
+        self.credit_label = QLabel("© 2025 JesusQuijada34")
+        self.credit_label.setStyleSheet("color: #aaaaaa;")
+        footer_layout.addWidget(self.credit_label)
 
         footer.setLayout(footer_layout)
-        v.addWidget(footer)
+        self.layout.addWidget(footer)
 
-        central.setLayout(v)
+        central.setLayout(self.layout)
         self.setCentralWidget(central)
+
+    def _setup_tray_icon(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+
+        self.tray_icon = QSystemTrayIcon(self)
+
+        # Create tray icon menu
+        tray_menu = QMenu()
+
+        show_action = tray_menu.addAction("Mostrar")
+        show_action.triggered.connect(self.show_normal)
+
+        exit_action = tray_menu.addAction("Salir")
+        exit_action.triggered.connect(self.close)
+
+        self.tray_icon.setContextMenu(tray_menu)
+
+        # Set icon
+        if OFFLINE_ICON_PATH.exists():
+            self.tray_icon.setIcon(QIcon(str(OFFLINE_ICON_PATH)))
+        else:
+            self.tray_icon.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+
+        self.tray_icon.show()
+        self.tray_icon.activated.connect(self.tray_icon_activated)
+
+    def tray_icon_activated(self, reason):
+        if reason == QSystemTrayIcon.DoubleClick:
+            self.show_normal()
+
+    def show_normal(self):
+        self.show()
+        self.setWindowState(self.windowState() & ~Qt.WindowMinimized | Qt.WindowActive)
+        self.activateWindow()
+
+    def closeEvent(self, event):
+        if self.tray_icon and self.tray_icon.isVisible():
+            self.hide()
+            event.ignore()
+        else:
+            event.accept()
 
     def _apply_font(self):
         try:
@@ -993,17 +1342,41 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
+    def toggle_theme(self):
+        self.dark_mode = not self.dark_mode
+        self.update_theme_icon()
+        self.setStyleSheet(APP_QSS_DARK if self.dark_mode else APP_QSS_LIGHT)
+
+    def update_theme_icon(self):
+        icon = self.style().standardIcon(
+            QStyle.SP_DialogYesButton if self.dark_mode else QStyle.SP_DialogNoButton)
+        self.theme_btn.setIcon(icon)
+        self.theme_btn.setIconSize(QSize(20, 20))
+
+    def show_offline_mode(self):
+        self.content_stack.setCurrentWidget(self.offline_mode)
+        self.status_label.setText("Modo offline - Sin conexión a internet")
+        self.refresh_btn.setEnabled(False)
+
+    def show_online_mode(self):
+        self.content_stack.setCurrentWidget(self.grid_view)
+        self.status_label.setText("Conectado")
+        self.refresh_btn.setEnabled(True)
+
     def load_cache_then_fetch(self):
         cached = cache_load()
         if cached:
             self.repo_list = cached
             self._populate_grid()
 
-        self.fetch_thread = RepoFetchThread()
-        self.fetch_thread.progress.connect(self.progress.setValue)
-        self.fetch_thread.finished_fetch.connect(self.on_repos_loaded)
-        self.fetch_thread.error.connect(self.on_fetch_error)
-        self.fetch_thread.start()
+        if is_connected():
+            self.fetch_thread = RepoFetchThread()
+            self.fetch_thread.progress.connect(self.progress.setValue)
+            self.fetch_thread.finished_fetch.connect(self.on_repos_loaded)
+            self.fetch_thread.error.connect(self.on_fetch_error)
+            self.fetch_thread.start()
+        else:
+            self.show_offline_mode()
 
     def on_fetch_error(self, msg):
         dlg = StyledMessageBox("Error", f"No se pudo obtener la lista: {msg}", parent=self)
@@ -1012,9 +1385,45 @@ class MainWindow(QMainWindow):
     def on_repos_loaded(self, results):
         self.repo_list = results
         self._populate_grid()
+        self.show_online_mode()
+
+    def check_for_updates(self):
+        if not is_connected():
+            return
+
+        self.status_label.setText("Comprobando actualizaciones...")
+
+        self.version_check_thread = VersionCheckThread(self.repo_list)
+        self.version_check_thread.update_available.connect(self.on_update_available)
+        self.version_check_thread.no_updates.connect(self.on_no_updates)
+        self.version_check_thread.start()
+
+    def on_update_available(self, info):
+        # Update our repo list
+        for i, item in enumerate(self.repo_list):
+            if item.get("repo") == info.get("repo"):
+                self.repo_list[i] = info
+                break
+
+        # Show notification
+        if self.tray_icon:
+            self.tray_icon.showMessage(
+                "Actualización disponible",
+                f"{info.get('name')} v{info.get('version')} está disponible",
+                QSystemTrayIcon.Information,
+                5000
+            )
+
+        # Update UI if needed
+        self._populate_grid()
+        self.status_label.setText("Actualizaciones disponibles")
+
+    def on_no_updates(self):
+        self.status_label.setText("Todas las aplicaciones están actualizadas")
 
     def on_refresh(self):
         if not is_connected():
+            self.show_offline_mode()
             dlg = StyledMessageBox(
                 "Sin conexión",
                 "No hay conexión a Internet. No se puede refrescar.",
@@ -1033,11 +1442,17 @@ class MainWindow(QMainWindow):
         self._populate_grid()
 
     def _compute_columns(self):
+        if self.content_stack.currentWidget() == self.offline_mode:
+            return 1
+
         w = max(220, self.grid_view.scroll.viewport().width())
         cols = max(1, w // 140)  # 140px per column
         return cols
 
     def _populate_grid(self):
+        if self.content_stack.currentWidget() == self.offline_mode:
+            return
+
         filter_text = self.search.text().strip().lower()
         fidx = self.filter_combo.currentIndex()
         filtered = []
@@ -1045,11 +1460,15 @@ class MainWindow(QMainWindow):
         for info in self.repo_list:
             # Apply filters
             name = (info.get("name") or "").lower()
+            app = (info.get("app") or "").lower()
             pub = (info.get("publisher") or "").lower()
             repo = (info.get("repo") or "").lower()
 
             if filter_text:
-                if filter_text not in name and filter_text not in pub and filter_text not in repo:
+                if (filter_text not in name and
+                    filter_text not in app and
+                    filter_text not in pub and
+                    filter_text not in repo):
                     continue
 
             if fidx == 1:  # Installed
@@ -1063,7 +1482,7 @@ class MainWindow(QMainWindow):
             filtered.append(info)
 
         # Sort by name
-        filtered.sort(key=lambda x: (x.get("name") or x.get("repo")).lower())
+        filtered.sort(key=lambda x: (x.get("name") or x.get("app") or x.get("repo")).lower())
 
         cols = self._compute_columns()
         self.grid_view.populate(filtered, cols)
@@ -1073,7 +1492,25 @@ class MainWindow(QMainWindow):
 
 def main():
     app = QApplication(sys.argv)
-    app.setStyleSheet(APP_QSS)
+    app.setStyleSheet(APP_QSS_DARK)
+
+    # Set dark palette for better dark mode support
+    palette = QPalette()
+    palette.setColor(QPalette.Window, QColor(45, 45, 45))
+    palette.setColor(QPalette.WindowText, Qt.white)
+    palette.setColor(QPalette.Base, QColor(35, 35, 35))
+    palette.setColor(QPalette.AlternateBase, QColor(45, 45, 45))
+    palette.setColor(QPalette.ToolTipBase, Qt.white)
+    palette.setColor(QPalette.ToolTipText, Qt.white)
+    palette.setColor(QPalette.Text, Qt.white)
+    palette.setColor(QPalette.Button, QColor(45, 45, 45))
+    palette.setColor(QPalette.ButtonText, Qt.white)
+    palette.setColor(QPalette.BrightText, Qt.red)
+    palette.setColor(QPalette.Link, QColor(42, 130, 218))
+    palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
+    palette.setColor(QPalette.HighlightedText, Qt.black)
+    app.setPalette(palette)
+
     w = MainWindow()
     w.show()
     sys.exit(app.exec_())
