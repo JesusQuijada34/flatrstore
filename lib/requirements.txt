@@ -1,1 +1,7 @@
 # Dependencias del paquete
+PyQt5==5.15.9
+requests==2.31.0
+markdown==3.5.1
+python-dotenv==1.0.0
+winshell==1.0.0
+pywin32==306; sys_platform == 'win32'
