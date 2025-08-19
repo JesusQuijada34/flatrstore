@@ -41,7 +41,7 @@ RAW_LIST_URL = "https://raw.githubusercontent.com/JesusQuijada34/catalog/refs/he
 RAW_BASE = "https://raw.githubusercontent.com/JesusQuijada34"
 GITHUB_BASE = "https://github.com/JesusQuijada34"
 HOME = Path.home()
-INSTALL_BASE = HOME / "Documents" / "Flatr Apps" if platform.system() != "Windows" else Path(os.getenv('APPDATA')) / "Flatr" / "Apps"
+INSTALL_BASE = HOME / "Documents" / "Flatr Apps" if platform.system() != "Windows" else Path(os.getenv('APPDATA')) / "Flatr Apps"
 CACHE_DIR = HOME / ".flatr_store_cache"
 ICON_CACHE_DIR = CACHE_DIR / "icons"
 ICON_INDEX_FILE = ICON_CACHE_DIR / "index.json"
@@ -50,7 +50,8 @@ CACHE_DIR.mkdir(parents=True, exist_ok=True)
 ICON_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 ROBOTO_TTF_URL = "https://github.com/google/fonts/raw/main/apache/roboto/Roboto-Regular.ttf"
-OFFLINE_ICON_PATH = Path(__file__).parent / "app" / "app-icon.ico" #"offline-icon.ico"
+OFFLINE_ICON_PATH = Path(__file__).parent / "app" / "offlinemd.ico" #"offline-icon.ico"
+MAIN_ICON = Path(__file__).parent / "app" / "app-icon.ico"
 
 # ----------------------------
 # THEME QSS
@@ -192,7 +193,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 
 /* Offline mode */
 #OfflineMode {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #404040, stop:1 #202020);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #27B224, stop:1 #4DB224);
 }
 
 #OfflineLabel {
@@ -339,7 +340,7 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {
 
 /* Offline mode */
 #OfflineMode {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #e0e0e0, stop:1 #c0c0c0);
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #34CD80, stop:1 #34CDCC);
 }
 
 #OfflineLabel {
@@ -1150,23 +1151,8 @@ class OfflineMode(QWidget):
             pixmap = pixmap.scaled(128, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.icon_label.setPixmap(pixmap)
         else:
-            # Create a simple offline icon
-            pixmap = QPixmap(128, 128)
-            pixmap.fill(Qt.transparent)
-
-            painter = QtGui.QPainter(pixmap)
-            painter.setRenderHint(QtGui.QPainter.Antialiasing)
-            painter.setBrush(QtGui.QBrush(QColor(150, 150, 150)))
-            painter.setPen(Qt.NoPen)
-            painter.drawEllipse(0, 0, 128, 128)
-
-            font = painter.font()
-            font.setPointSize(48)
-            painter.setFont(font)
-            painter.setPen(QColor(80, 80, 80))
-            painter.drawText(pixmap.rect(), Qt.AlignCenter, "!")
-            painter.end()
-
+            pixmap = QPixmap(str(MAIN_ICON))
+            pixmap = pixmap.scaled(128, 128, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.icon_label.setPixmap(pixmap)
 
 class MainWindow(QMainWindow):
@@ -1207,7 +1193,7 @@ class MainWindow(QMainWindow):
         header_layout = QHBoxLayout()
         header_layout.setContentsMargins(15, 5, 15, 5)
 
-        self.title_label = QLabel("Flatr Store")
+        self.title_label = QLabel("FLATR STORE")
         self.title_label.setStyleSheet("font-size: 16pt; font-weight: bold;")
         header_layout.addWidget(self.title_label)
 
@@ -1310,7 +1296,7 @@ class MainWindow(QMainWindow):
         if OFFLINE_ICON_PATH.exists():
             self.tray_icon.setIcon(QIcon(str(OFFLINE_ICON_PATH)))
         else:
-            self.tray_icon.setIcon(self.style().standardIcon(QStyle.SP_ComputerIcon))
+            self.tray_icon.setIcon(QIcon(str(MAIN_ICON)))
 
         self.tray_icon.show()
         self.tray_icon.activated.connect(self.tray_icon_activated)
@@ -1360,7 +1346,7 @@ class MainWindow(QMainWindow):
 
     def show_online_mode(self):
         self.content_stack.setCurrentWidget(self.grid_view)
-        self.status_label.setText("Conectado")
+        self.status_label.setText("Conectado a la base!")
         self.refresh_btn.setEnabled(True)
 
     def load_cache_then_fetch(self):
@@ -1494,6 +1480,7 @@ def main():
     app = QApplication(sys.argv)
     app.setStyleSheet(APP_QSS_DARK)
 
+    """
     # Set dark palette for better dark mode support
     palette = QPalette()
     palette.setColor(QPalette.Window, QColor(45, 45, 45))
@@ -1510,6 +1497,7 @@ def main():
     palette.setColor(QPalette.Highlight, QColor(42, 130, 218))
     palette.setColor(QPalette.HighlightedText, Qt.black)
     app.setPalette(palette)
+    """
 
     w = MainWindow()
     w.show()
