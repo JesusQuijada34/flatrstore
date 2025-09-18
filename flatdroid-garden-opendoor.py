@@ -1,627 +1,574 @@
+#!/usr/bin/env python3
 """
-main.py
+main.py - Interfaz para "Proyectos de Jesús Quijada"
 
-Versión Kivy de la página "Proyectos de Jesús Quijada".
-- Descarga lista de repos (rawListURL) desde GitHub.
-- Muestra tarjetas con imagen, título, categoría y rating.
-- Botones: Vista previa (abre demo si existe) y Descargar (descarga zip del repo).
-- Banner de cumpleaños con cuenta regresiva y animación "confetti" simple.
-- Todo embebido en un string KV (sin archivo .kv separado).
-
-Requisitos:
-    pip install kivy requests
-
-Notas:
- - En Android/Termux puede requerir permisos y ajustes adicionales para guardar archivos.
- - Las descargas usan threads para no bloquear la UI.
+Features:
+- Autoinstala dependencias (requests, PySide6, pygame, rich, pywebview) si faltan.
+- Preferencia: PySide6 GUI con QSS estilo GitHub (buscador, cards, preview, descarga con progreso, abrir carpeta).
+- Si USE_PYGAME=1 o PySide6 no está disponible -> Modo Pygame con efectos glow y cursor personalizado.
+- Fallback: consola interactiva (rich si está disponible) o abrir web en navegador.
+- Descargas guardadas en ./downloads/
+- Fuente de datos: https://raw.githubusercontent.com/JesusQuijada34/catalog/refs/heads/main/repo.list
 """
 
-from kivy.app import App
-from kivy.lang import Builder
-from kivy.metrics import dp
-from kivy.core.window import Window
-from kivy.properties import StringProperty, NumericProperty, BooleanProperty, ListProperty
-from kivy.uix.boxlayout import BoxLayout
-from kivy.uix.popup import Popup
-from kivy.uix.label import Label
-from kivy.uix.behaviors import ButtonBehavior
-from kivy.uix.image import AsyncImage
-from kivy.clock import mainthread, Clock
-from kivy.animation import Animation
-from kivy.graphics import Color, Rectangle, Ellipse
-
-import threading
-import requests
-import webbrowser
-import os
-import time
+import os, sys, subprocess, importlib, threading, time, math, webbrowser, io
 from datetime import datetime
+RAW_LIST_URL = "https://raw.githubusercontent.com/JesusQuijada34/catalog/refs/heads/main/repo.list"
+GITHUB_BASE = "https://github.com/JesusQuijada34"
+DOWNLOAD_DIR = os.path.join(os.getcwd(), "downloads")
+USE_PYGAME = os.environ.get("USE_PYGAME", "0") == "1"
 
-# Opcional (útil en desktop)
-Window.size = (420, 800)
+# ----------------------------
+# Helper: auto-install imports
+# ----------------------------
+def ensure_package(pip_name, import_name=None):
+    """
+    Try to import module; if fails, install via pip and re-import.
+    Returns module or None.
+    """
+    if import_name is None:
+        import_name = pip_name
+    try:
+        return importlib.import_module(import_name)
+    except Exception:
+        print(f"[installer] Instalando {pip_name} ...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name], stdout=subprocess.DEVNULL)
+            return importlib.import_module(import_name)
+        except Exception as e:
+            print(f"[installer] Error instalando {pip_name}: {e}")
+            return None
 
-KV = f"""
-#:import dp kivy.metrics.dp
+# Ensure always available
+requests = ensure_package("requests")
+# Optional packages
+PySide6 = ensure_package("PySide6")
+pygame = ensure_package("pygame")
+rich = ensure_package("rich")
+pywebview = ensure_package("pywebview", "webview")  # import_name differs
 
-<Header@BoxLayout>:
-    size_hint_y: None
-    height: dp(64)
-    padding: dp(10)
-    spacing: dp(10)
-    orientation: 'horizontal'
-    canvas.before:
-        Color:
-            rgba: 0.14, 0.16, 0.18, 1
-        Rectangle:
-            pos: self.pos
-            size: self.size
-    Label:
-        text: "Proyectos de Jesús Quijada"
-        color: 1,1,1,1
-        bold: True
-        font_size: '18sp'
-        size_hint_x: 0.55
-    BoxLayout:
-        orientation: 'horizontal'
-        size_hint_x: 0.45
-        spacing: dp(6)
-        TextInput:
-            id: search_input
-            hint_text: "Buscar proyectos..."
-            size_hint_x: 0.75
-            multiline: False
-        Button:
-            text: "Buscar"
-            size_hint_x: 0.25
-            on_release: app.on_search(search_input.text)
+# ----------------------------
+# Utility functions
+# ----------------------------
+def ensure_download_dir():
+    os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-<Card@BoxLayout>:
-    orientation: 'vertical'
-    size_hint_y: None
-    height: dp(240)
-    padding: dp(0)
-    spacing: dp(0)
-    canvas.before:
-        Color:
-            rgba: app.card_bg_color
-        RoundedRectangle:
-            pos: self.pos
-            size: self.size
-            radius: [8]
-        Color:
-            rgba: app.card_border_color
-        Line:
-            rounded_rectangle: (*self.pos, *self.size, 8)
-            width: 1
-    BoxLayout:
-        size_hint_y: 0.6
-        pos_hint: {'top': 1}
-        AsyncImage:
-            id: preview_img
-            source: root.splash if hasattr(root, 'splash') and root.splash else root.icon
-            allow_stretch: True
-            keep_ratio: False
-            on_error: self.source = root.icon if root.icon else ''
-    BoxLayout:
-        orientation: 'vertical'
-        padding: dp(10)
-        spacing: dp(6)
-        Label:
-            text: root.title
-            bold: True
-            color: app.accent_color
-            size_hint_y: None
-            height: self.texture_size[1]
-            text_size: self.width, None
-        Label:
-            text: root.category
-            font_size: '12sp'
-            color: app.muted_color
-            size_hint_y: None
-            height: self.texture_size[1]
-        BoxLayout:
-            size_hint_y: None
-            height: dp(36)
-            spacing: dp(8)
-            Button:
-                text: "Vista previa"
-                on_release: app.on_preview(root.preview_url)
-                disabled: not root.preview_url
-            Button:
-                text: "Descargar"
-                on_release: app.on_download(root.repo_name, root.repo_zip)
-"""
-
-# Main KV layout
-APP_KV = """
-BoxLayout:
-    orientation: "vertical"
-
-    Header:
-
-    ScrollView:
-        id: main_scroll
-        do_scroll_x: False
-        GridLayout:
-            id: main_grid
-            cols: 1
-            size_hint_y: None
-            height: self.minimum_height
-            padding: dp(12)
-            spacing: dp(12)
-
-            # Loading area
-            BoxLayout:
-                id: loading_box
-                orientation: 'vertical'
-                size_hint_y: None
-                height: dp(160)
-                padding: dp(12)
-                spacing: dp(8)
-                canvas.before:
-                    Color:
-                        rgba: 1,1,1,1
-                    Rectangle:
-                        pos: self.pos
-                        size: self.size
-                Label:
-                    id: loading_label
-                    text: "Cargando proyectos..."
-                    size_hint_y: None
-                    height: self.texture_size[1]
-
-            Label:
-                text: "🔮 Recomendados para ti"
-                font_size: '20sp'
-                bold: True
-                size_hint_y: None
-                height: self.texture_size[1]
-
-            GridLayout:
-                id: featured_grid
-                cols: 2
-                size_hint_y: None
-                height: self.minimum_height
-                spacing: dp(10)
-
-            Label:
-                text: "🏆 Listas de éxitos"
-                font_size: '20sp'
-                bold: True
-                size_hint_y: None
-                height: self.texture_size[1]
-
-            GridLayout:
-                id: ranking_grid
-                cols: 1
-                size_hint_y: None
-                height: self.minimum_height
-                spacing: dp(8)
-
-            Label:
-                text: "🎮 Todos los proyectos"
-                font_size: '20sp'
-                bold: True
-                size_hint_y: None
-                height: self.texture_size[1]
-
-            GridLayout:
-                id: all_apps_grid
-                cols: 1
-                size_hint_y: None
-                height: self.minimum_height
-                spacing: dp(12)
-
-            # Footer spacer
-            Widget:
-                size_hint_y: None
-                height: dp(24)
-
-    # Birthday/celebration overlay (initially hidden)
-    FloatLayout:
-        id: overlay
-        size_hint: 1, 1
-
-        BoxLayout:
-            id: birthday_box
-            orientation: 'horizontal'
-            size_hint: None, None
-            size: dp(360), dp(80)
-            pos: root.width - self.width - dp(16), dp(16)
-            padding: dp(10)
-            spacing: dp(10)
-            canvas.before:
-                Color:
-                    rgba: 1, 0.6, 0.2, 1
-                RoundedRectangle:
-                    pos: self.pos
-                    size: self.size
-                    radius: [12]
-            Image:
-                id: gift_img
-                source: ''
-                size_hint: None, None
-                size: dp(48), dp(48)
-            BoxLayout:
-                orientation: 'vertical'
-                Label:
-                    id: countdown_text
-                    text: "Faltan 00:00:00"
-                    color: 1,1,1,1
-                    bold: True
-                Label:
-                    id: countdown_detail
-                    text: "Cuenta regresiva"
-                    color: 1,1,1,1
-            Button:
-                text: "Cerrar"
-                size_hint_x: None
-                width: dp(64)
-                on_release: app.hide_birthday()
-
-"""
-
-# Combine KV
-FULL_KV = KV + "\n" + APP_KV
-
-# App-level colors & small helpers
-class ProjectCard(BoxLayout):
-    title = StringProperty("Título")
-    category = StringProperty("Aplicación")
-    rating = NumericProperty(4.0)
-    splash = StringProperty("")       # splash image url
-    icon = StringProperty("")         # icon url
-    preview_url = StringProperty("")  # live demo
-    repo_name = StringProperty("")    # repo short name
-    repo_zip = StringProperty("")     # zip download url
-
-
-class ProjectsApp(App):
-    # Colors (as rgba tuples)
-    accent_color = ListProperty([0.04, 0.41, 0.86, 1])  # azul
-    muted_color = ListProperty([0.45, 0.49, 0.52, 1])
-    card_bg_color = ListProperty([1, 1, 1, 1])
-    card_border_color = ListProperty([0.86, 0.87, 0.88, 1])
-
-    # URLs
-    rawListURL = "https://raw.githubusercontent.com/JesusQuijada34/catalog/refs/heads/main/repo.list"
-
-    def build(self):
-        Builder.load_string(FULL_KV)
-        self.root = Builder.load_string("BoxLayout:")  # dummy to have root var
-        # Actually build the layout from the KV top-level (we will create a dynamic root)
-        main = Builder.template("BoxLayout")
-        # Instead of templates, load the big root UI:
-        self.interface = Builder.load_string(APP_KV)
-        # store main containers
-        self.main_grid = self.interface.ids.main_grid
-        self.featured_grid = self.interface.ids.featured_grid
-        self.all_apps_grid = self.interface.ids.all_apps_grid
-        self.loading_label = self.interface.ids.loading_label
-        self.ranking_grid = self.interface.ids.ranking_grid
-        self.overlay = self.interface.ids.overlay
-        self.birthday_box = self.interface.ids.birthday_box
-        self.countdown_text = self.interface.ids.countdown_text
-        self.countdown_detail = self.interface.ids.countdown_detail
-
-        # Hide birthday initially
-        self.birthday_box.opacity = 0
-        self.birthday_box.disabled = True
-
-        # Start background load
-        threading.Thread(target=self.load_repos, daemon=True).start()
-        # Start birthday init
-        Clock.schedule_once(lambda dt: self.init_birthday(), 1)
-
-        return self.interface
-
-    def on_search(self, text):
-        text = text.strip().lower()
-        if not text:
-            # reload all
-            self.populate_all(self.all_repos)
+def open_downloads_folder():
+    path = os.path.abspath(DOWNLOAD_DIR)
+    try:
+        if sys.platform.startswith("win"):
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
         else:
-            filt = [r for r in self.all_repos if text in r['display_name'].lower() or text in r.get('category','').lower()]
-            self.populate_all(filt)
+            subprocess.Popen(["xdg-open", path])
+    except Exception:
+        print("No se pudo abrir carpeta de descargas. Ruta:", path)
 
-    # ---------- Networking & parsing ----------
-    def load_repos(self):
-        # Download repo list
-        self._set_loading("Descargando lista...")
-        try:
-            r = requests.get(self.rawListURL, timeout=20)
+def fetch_repo_list_quick():
+    """Return list of repo names (str). Best-effort."""
+    try:
+        resp = requests.get(RAW_LIST_URL, timeout=12)
+        resp.raise_for_status()
+        names = [s.strip() for s in resp.text.split(",") if s.strip()]
+        return names
+    except Exception as e:
+        print("Error cargando repo list:", e)
+        return []
+
+def fetch_repo_details(repo_name):
+    """
+    Best-effort fetch details.xml, splash/icon presence, demo.
+    Returns dict with keys: repo_name, display_name, category, rating, icon, splash, preview, repo_zip
+    """
+    base_raw = f"https://raw.githubusercontent.com/JesusQuijada34/{repo_name}/main"
+    details_url = f"{base_raw}/details.xml"
+    icon = f"{base_raw}/app/app-icon.ico"
+    splash = f"{base_raw}/assets/splash.png"
+    repo_zip = f"{GITHUB_BASE}/{repo_name}/archive/refs/heads/main.zip"
+    preview = f"https://jesusquijada34.github.io/{repo_name}"
+    display = repo_name
+    category = "Aplicación"
+    rating = "4.0"
+    try:
+        r = requests.get(details_url, timeout=6)
+        if r.ok and "<" in r.text:
+            txt = r.text
+            import re
+            m = re.search(r"<name>(.*?)</name>", txt, re.S|re.I)
+            if m: display = m.group(1).strip()
+            m = re.search(r"<category>(.*?)</category>", txt, re.S|re.I)
+            if m: category = m.group(1).strip()
+            m = re.search(r"<rate>(.*?)</rate>", txt, re.S|re.I)
+            if m: rating = m.group(1).strip()
+    except Exception:
+        pass
+    # check splash/icon quickly with HEAD
+    try:
+        h = requests.head(splash, timeout=4)
+        if not h.ok:
+            splash = ""
+    except Exception:
+        splash = ""
+    try:
+        h2 = requests.head(preview, timeout=4, allow_redirects=True)
+        if not (h2.ok or str(h2.status_code).startswith("3")):
+            preview = ""
+    except Exception:
+        preview = ""
+    return {
+        "repo_name": repo_name,
+        "display_name": display,
+        "category": category,
+        "rating": rating,
+        "icon": icon,
+        "splash": splash,
+        "preview": preview,
+        "repo_zip": repo_zip
+    }
+
+# --------------
+# Downloader
+# --------------
+def download_with_progress(url, repo_name, progress_callback=None, chunk_size=8192):
+    """
+    Downloads url -> ./downloads/<repo_name>.zip
+    Calls progress_callback(percent:int, downloaded:int, total:int) periodically on the same thread.
+    """
+    ensure_download_dir()
+    local = os.path.join(DOWNLOAD_DIR, f"{repo_name}.zip")
+    try:
+        with requests.get(url, stream=True, timeout=20) as r:
             r.raise_for_status()
-            repo_text = r.text
-            repo_names = [s.strip() for s in repo_text.split(',') if s.strip()]
-            if not repo_names:
-                self._set_loading("Lista vacía o formato inesperado.")
-                return
-        except Exception as e:
-            self._set_loading(f"Error al bajar la lista: {e}")
-            return
+            total = int(r.headers.get("content-length",0) or 0)
+            downloaded = 0
+            with open(local, "wb") as f:
+                for chunk in r.iter_content(chunk_size=chunk_size):
+                    if not chunk:
+                        continue
+                    f.write(chunk)
+                    downloaded += len(chunk)
+                    if progress_callback and total:
+                        pct = int(downloaded*100/total)
+                        progress_callback(pct, downloaded, total)
+        return local, None
+    except Exception as e:
+        return None, str(e)
 
-        self._set_loading(f"Cargando {len(repo_names)} proyectos...")
-        # fetch details in threads (limited concurrency)
-        details = []
-        lock = threading.Lock()
-        finished = 0
+# ----------------------------
+# PySide6 GUI (QSS estilo GitHub)
+# ----------------------------
+def run_pyside6_gui():
+    if not PySide6:
+        raise RuntimeError("PySide6 no disponible")
+    # import Qt modules
+    from PySide6 import QtWidgets, QtCore, QtGui
+    from PySide6.QtCore import Qt, Slot, Signal
+    from PySide6.QtGui import QPixmap, QCursor
+    from PySide6.QtWidgets import (QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+                                   QLineEdit, QPushButton, QScrollArea, QGridLayout, QFrame,
+                                   QProgressDialog, QMessageBox, QFileDialog)
+    # QSS inspired in GitHub color tokens (simplified)
+    QSS = """
+    QWidget { background: #f6f8fa; color: #24292f; font-family: -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; }
+    #header { background: #24292f; color: white; padding: 12px; }
+    QLabel#title { font-weight: 700; font-size: 18px; color: white; }
+    QLineEdit#search { padding: 6px; border-radius: 8px; border: 1px solid #d0d7de; background: white; }
+    QPushButton { padding: 6px 10px; border-radius: 8px; background: #f6f8fa; border: 1px solid rgba(31,35,40,0.08); }
+    QPushButton#primary { background: #1a7f37; color: white; border: none; padding: 6px 12px; }
+    QFrame.card { background: white; border: 1px solid #d0d7de; border-radius: 8px; }
+    QLabel.repoTitle { color: #0969da; font-weight: 700; font-size: 14px; }
+    QLabel.small { color: #6e7781; font-size: 12px; }
+    QScrollArea { border: none; }
+    """
 
-        def worker(name):
-            nonlocal finished
-            info = self.get_repo_details(name)
-            with lock:
-                details.append(info)
-                finished += 1
-                self._set_loading(f"Cargando proyectos... ({finished}/{len(repo_names)})")
-
-        threads = []
-        for nm in repo_names:
-            t = threading.Thread(target=worker, args=(nm,), daemon=True)
-            t.start()
-            threads.append(t)
-            # a tiny throttle
-            time.sleep(0.05)
-
-        # wait for threads
-        for t in threads:
-            t.join(timeout=30)
-
-        # Sort by rating desc
-        details_sorted = sorted(details, key=lambda x: float(x.get('rating', 0) or 0), reverse=True)
-        self.all_repos = details_sorted
-
-        # update UI on main thread
-        self._set_loading("Renderizando UI...")
-        Clock.schedule_once(lambda dt: self.populate_ui(details_sorted), 0)
-
-    def get_repo_details(self, repo_name):
-        # Try to fetch details.xml (best effort), check splash and demo
-        base_raw = f"https://raw.githubusercontent.com/JesusQuijada34/{repo_name}/main"
-        details_url = f"{base_raw}/details.xml"
-        icon_url = f"{base_raw}/app/app-icon.ico"
-        zip_url = f"https://github.com/JesusQuijada34/{repo_name}/archive/refs/heads/main.zip"
-        splash_url = f"{base_raw}/assets/splash.png"
-        preview = None
-
-        rating = "4.0"
-        display_name = repo_name
-        category = "Aplicación"
-
-        # details.xml
-        try:
-            r = requests.get(details_url, timeout=8)
-            if r.ok and "<" in r.text:
-                # quick parse for <name>, <category>, <rate>
-                txt = r.text
-                import re
-                m_name = re.search(r"<name>(.*?)</name>", txt, re.S|re.I)
-                m_cat = re.search(r"<category>(.*?)</category>", txt, re.S|re.I)
-                m_rate = re.search(r"<rate>(.*?)</rate>", txt, re.S|re.I)
-                if m_name:
-                    display_name = m_name.group(1).strip()
-                if m_cat:
-                    category = m_cat.group(1).strip()
-                if m_rate:
-                    rating = m_rate.group(1).strip()
-        except Exception:
-            pass
-
-        # check splash
-        try:
-            h = requests.head(splash_url, timeout=6)
-            if not h.ok:
-                splash_url = ""
-        except Exception:
-            splash_url = ""
-
-        # check demo on gh-pages
-        try:
-            demo = f"https://jesusquijada34.github.io/{repo_name}"
-            h2 = requests.head(demo, timeout=6, allow_redirects=True)
-            if h2.ok or str(h2.status_code).startswith('3'):
-                preview = demo
-        except Exception:
-            preview = None
-
-        return {
-            "repo_name": repo_name,
-            "display_name": display_name,
-            "category": category,
-            "rating": rating,
-            "icon": icon_url,
-            "splash": splash_url,
-            "preview": preview,
-            "repo_zip": zip_url
-        }
-
-    # ---------- UI population ----------
-    @mainthread
-    def _set_loading(self, text):
-        try:
-            self.loading_label.text = text
-        except Exception:
-            pass
-
-    def populate_ui(self, repos):
-        # Clear loading and populate featured / all
-        self.loading_label.text = "Proyectos cargados"
-        # featured: first 6
-        featured = repos[:6]
-        self.featured_grid.clear_widgets()
-        for r in featured:
-            card = ProjectCard()
-            card.title = r['display_name']
-            card.category = r['category']
-            card.rating = float(r.get('rating', 4.0) or 4.0)
-            card.icon = r.get('icon','')
-            card.splash = r.get('splash','')
-            card.preview_url = r.get('preview') or ""
-            card.repo_name = r['repo_name']
-            card.repo_zip = r.get('repo_zip','')
-            self.featured_grid.add_widget(card)
-
-        # ranking: simple list of top 6 broken into rows
-        self.ranking_grid.clear_widgets()
-        top_slice = repos[:9]
-        for i in range(0, min(len(top_slice), 9), 3):
-            row = BoxLayout(size_hint_y=None, height=dp(80), spacing=dp(8))
-            for j in range(3):
-                idx = i + j
-                if idx < len(top_slice):
-                    info = top_slice[idx]
-                    b = ButtonLikeRanking(text=f"{info['display_name']}\\n{info['category']}")
-                    # open repo on click
-                    b.repo = info
-                    b.bind(on_release=self._on_open_repo_short)
-                    row.add_widget(b)
-                else:
-                    row.add_widget(Label())
-            self.ranking_grid.add_widget(row)
-
-        # all apps
-        self.populate_all(repos)
-
-    def populate_all(self, repos):
-        self.all_apps_grid.clear_widgets()
-        for r in repos:
-            card = ProjectCard()
-            card.title = r['display_name']
-            card.category = r['category']
-            card.rating = float(r.get('rating', 4.0) or 4.0)
-            card.icon = r.get('icon','')
-            card.splash = r.get('splash','')
-            card.preview_url = r.get('preview') or ""
-            card.repo_name = r['repo_name']
-            card.repo_zip = r.get('repo_zip','')
-            self.all_apps_grid.add_widget(card)
-
-    # ---------- Actions ----------
-    def on_preview(self, url):
-        if not url:
-            self._popup("No hay demo disponible", "Este proyecto no tiene vista previa.")
-            return
-        webbrowser.open(url)
-
-    def on_download(self, repo_name, zip_url):
-        if not zip_url:
-            self._popup("Error", "URL de descarga no encontrada.")
-            return
-        # Ask: start download thread
-        threading.Thread(target=self._download_thread, args=(repo_name, zip_url), daemon=True).start()
-        self._popup("Descarga iniciada", f"Descargando {repo_name} ...")
-
-    def _download_thread(self, repo_name, url):
-        # Create downloads dir
-        try:
-            dl_dir = os.path.join(os.getcwd(), "downloads")
-            os.makedirs(dl_dir, exist_ok=True)
-            local_fname = os.path.join(dl_dir, f"{repo_name}.zip")
-            with requests.get(url, stream=True, timeout=15) as r:
-                r.raise_for_status()
-                total = int(r.headers.get('content-length', 0))
-                chunk_size = 8192
-                downloaded = 0
-                with open(local_fname, 'wb') as f:
-                    for chunk in r.iter_content(chunk_size=chunk_size):
-                        if chunk:
-                            f.write(chunk)
-                            downloaded += len(chunk)
-                # finished
-            self._popup(f"Descarga completada", f"Guardado en: {local_fname}")
-        except Exception as e:
-            self._popup("Error en descarga", str(e))
-
-    # ---------- Small popups ----------
-    @mainthread
-    def _popup(self, title, message):
-        p = Popup(title=title, content=Label(text=message), size_hint=(0.8, 0.4))
-        p.open()
-
-    # ---------- Ranking button handler ----------
-    def _on_open_repo_short(self, widget):
-        repo = getattr(widget, 'repo', None)
-        if repo:
-            url = f"https://github.com/JesusQuijada34/{repo['repo_name']}"
-            webbrowser.open(url)
-
-    # ---------- Birthday / countdown ----------
-    def init_birthday(self):
-        # birthday original: 1 Sept 2009
-        birthday = datetime(2009, 9, 1)
-        now = datetime.now()
-        # if current month is Aug or Sep show banner
-        if now.month in (8, 9):
-            # show banner
-            self.birthday_box.opacity = 1
-            self.birthday_box.disabled = False
-            # animate subtle pulsing
-            anim = Animation(scale=1.02, duration=1) + Animation(scale=1.0, duration=1)
-            anim.repeat = True
-            # update countdown per second
-            Clock.schedule_interval(lambda dt: self.update_countdown(birthday), 0.5)
-            # simple confetti scheduled occasionally
-            Clock.schedule_interval(lambda dt: self._confetti_once(), 4)
-
-    @mainthread
-    def update_countdown(self, birthday):
-        now = datetime.now()
-        # next upcoming birthday (this year or next)
-        target = datetime(now.year, birthday.month, birthday.day)
-        if target <= now:
-            target = datetime(now.year + 1, birthday.month, birthday.day)
-        delta = target - now
-        days = delta.days
-        hours, rem = divmod(delta.seconds, 3600)
-        minutes, seconds = divmod(rem, 60)
-        self.countdown_text.text = f"Faltan {days:02d}d {hours:02d}h:{minutes:02d}m"
-        self.countdown_detail.text = f"{seconds:02d}s restantes"
-
-    def hide_birthday(self):
-        # fade out
-        Animation(opacity=0, d=0.4).start(self.birthday_box)
-        self.birthday_box.disabled = True
-
-    def _confetti_once(self):
-        # Simple confetti: draw colored ellipses that fall and fade
-        canvas = self.interface.canvas
-        colors = [
-            (1, 0, 0, 1), (0, 1, 0, 1), (0, 0, 1, 1),
-            (1, 1, 0, 1), (1, 0, 1, 1), (0, 1, 1, 1)
-        ]
-        # spawn a few confetti pieces in overlay
-        for i in range(6):
-            x = dp(20 + i*60)
-            y = self.interface.height + dp(10)
-            w = dp(8 + (i % 3)*4)
-            h = w
-            col = colors[i % len(colors)]
-            instrs = []
-            with self.interface.canvas:
-                c = Color(*col)
-                e = Ellipse(pos=(x, y), size=(w, h))
-                instrs.append((c, e))
-            # animate down
-            anim = Animation(pos=(x, -dp(40)), size=(w, h), duration=3 + i*0.2, t='out_quad') + Animation(a=0, d=0.1)
-            # bind update
-            def _update(anim, widget, instr=e):
-                pass
-            # schedule removal
-            def _remove(dt, instr_pair=(c, e)):
+    class RepoCard(QFrame):
+        def __init__(self, info, parent=None):
+            super().__init__(parent)
+            self.setProperty("class", "card")
+            self.setObjectName("card")
+            self.info = info
+            self.setLayout(QVBoxLayout())
+            self.layout().setContentsMargins(0,0,0,0)
+            # Image area
+            img = QLabel()
+            img.setFixedHeight(140)
+            img.setAlignment(Qt.AlignCenter)
+            # Try load splash or icon
+            pix = QPixmap()
+            img_url = info.get("splash") or info.get("icon") or ""
+            if img_url:
                 try:
-                    self.interface.canvas.remove(instr_pair[1])
-                    self.interface.canvas.remove(instr_pair[0])
+                    r = requests.get(img_url, timeout=6)
+                    if r.ok:
+                        pix.loadFromData(r.content)
                 except Exception:
-                    pass
-            Clock.schedule_once(_remove, 4.0)
+                    pix = QPixmap()
+            img.setPixmap(pix.scaled(img.width() or 360, 140, Qt.KeepAspectRatioByExpanding, Qt.SmoothTransformation))
+            self.layout().addWidget(img)
+            # Content
+            content = QWidget()
+            cv = QVBoxLayout(content)
+            cv.setContentsMargins(10,10,10,10)
+            title = QLabel(info.get("display_name",""))
+            title.setObjectName("repoTitle")
+            title.setProperty("class","repoTitle")
+            cat = QLabel(info.get("category",""))
+            cat.setProperty("class","small")
+            btnrow = QHBoxLayout()
+            preview_btn = QPushButton("Vista previa")
+            preview_btn.setEnabled(bool(info.get("preview")))
+            preview_btn.clicked.connect(lambda: webbrowser.open(info.get("preview")) if info.get("preview") else None)
+            dl_btn = QPushButton("Descargar")
+            dl_btn.setObjectName("primary")
+            dl_btn.clicked.connect(lambda: self.start_download())
+            btnrow.addWidget(preview_btn)
+            btnrow.addWidget(dl_btn)
+            cv.addWidget(title)
+            cv.addWidget(cat)
+            cv.addLayout(btnrow)
+            self.layout().addWidget(content)
+
+        def start_download(self):
+            url = self.info.get("repo_zip")
+            name = self.info.get("repo_name")
+            dlg = QProgressDialog(f"Descargando {name}...", "Cancelar", 0, 100, self)
+            dlg.setWindowModality(Qt.WindowModal)
+            dlg.setMinimumDuration(150)
+            dlg.show()
+            def progress_cb(pct, d, t):
+                # run in main thread
+                QtCore.QMetaObject.invokeMethod(dlg, "setValue", Qt.QueuedConnection, QtCore.Q_ARG(int, pct))
+            def _dl():
+                local, err = download_with_progress(url, name, progress_callback=progress_cb)
+                QtCore.QMetaObject.invokeMethod(dlg, "close", Qt.QueuedConnection)
+                if err:
+                    QtWidgets.QMessageBox.critical(self, "Error descarga", str(err))
+                else:
+                    msg = f"Guardado en: {local}"
+                    QtWidgets.QMessageBox.information(self, "Descarga completada", msg)
+            threading.Thread(target=_dl, daemon=True).start()
+
+    class MainWindow(QtWidgets.QMainWindow):
+        def __init__(self):
+            super().__init__()
+            self.setWindowTitle("Proyectos de Jesús Quijada")
+            self.resize(1000, 720)
+            self.central = QWidget()
+            self.setCentralWidget(self.central)
+            layout = QVBoxLayout(self.central)
+            layout.setContentsMargins(0,0,0,0)
+            # Header
+            header = QFrame()
+            header.setObjectName("header")
+            hbox = QHBoxLayout(header)
+            hbox.setContentsMargins(12,12,12,12)
+            title = QLabel("Proyectos de Jesús Quijada")
+            title.setObjectName("title")
+            hbox.addWidget(title)
+            hbox.addStretch()
+            self.search = QLineEdit()
+            self.search.setObjectName("search")
+            self.search.setPlaceholderText("Buscar proyectos...")
+            search_btn = QPushButton("Buscar")
+            search_btn.clicked.connect(self.on_search)
+            hbox.addWidget(self.search)
+            hbox.addWidget(search_btn)
+            # button open downloads
+            open_btn = QPushButton("Abrir descargas")
+            open_btn.clicked.connect(open_downloads_folder)
+            hbox.addWidget(open_btn)
+            # toggle pygame mode
+            pg_btn = QPushButton("Forzar Pygame")
+            pg_btn.clicked.connect(lambda: self.ask_restart_pygame())
+            hbox.addWidget(pg_btn)
+            layout.addWidget(header)
+            # Scroll area for grid
+            self.scroll = QScrollArea()
+            self.scroll.setWidgetResizable(True)
+            self.container = QWidget()
+            self.grid = QGridLayout(self.container)
+            self.grid.setSpacing(12)
+            self.scroll.setWidget(self.container)
+            layout.addWidget(self.scroll)
+            # status bar
+            self.status = QtWidgets.QStatusBar()
+            self.setStatusBar(self.status)
+            # load repos in background
+            threading.Thread(target=self.load_and_populate, daemon=True).start()
+
+        def ask_restart_pygame(self):
+            QMessageBox.information(self, "Reiniciar", "Se reiniciará en modo Pygame si acepta. La app actual se cerrará.")
+            # set env var and restart process
+            os.environ["USE_PYGAME"] = "1"
+            QtWidgets.QApplication.quit()
+            # re-exec the script
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        def load_and_populate(self):
+            names = fetch_repo_list_quick()
+            self.status.showMessage(f"Cargando {len(names)} proyectos...")
+            details = []
+            for i, n in enumerate(names):
+                details.append(fetch_repo_details(n))
+                self.status.showMessage(f"Cargando {i+1}/{len(names)}")
+            # sort by rating desc (best-effort numeric)
+            try:
+                details.sort(key=lambda x: float(x.get("rating") or 0), reverse=True)
+            except Exception:
+                pass
+            QtCore.QMetaObject.invokeMethod(self, lambda: self.populate(details), Qt.QueuedConnection)
+
+        @Slot()
+        def populate(self, details):
+            # clear grid
+            while self.grid.count():
+                item = self.grid.takeAt(0)
+                w = item.widget()
+                if w:
+                    w.setParent(None)
+            cols = 3
+            r = c = 0
+            for d in details:
+                card = RepoCard(d)
+                self.grid.addWidget(card, r, c)
+                c += 1
+                if c >= cols:
+                    c = 0; r += 1
+            self.status.showMessage(f"{len(details)} proyectos cargados")
+
+        def on_search(self):
+            term = self.search.text().strip().lower()
+            # naive rebuild filter
+            for i in range(self.grid.count()):
+                w = self.grid.itemAt(i).widget()
+                if not w: continue
+                name = w.info.get("display_name","").lower()
+                cat = w.info.get("category","").lower()
+                visible = (term in name) or (term in cat) or (not term)
+                w.setVisible(visible)
+
+    app = QApplication(sys.argv)
+    app.setStyleSheet(QSS)
+    mw = MainWindow()
+    mw.show()
+    app.exec_()
+
+# ----------------------------
+# Pygame mode
+# ----------------------------
+def run_pygame_mode():
+    if not pygame:
+        raise RuntimeError("pygame no disponible")
+    import pygame as pg
+    pg.init()
+    ensure_download_dir()
+    W, H = 1100, 700
+    screen = pg.display.set_mode((W,H))
+    pg.display.set_caption("Proyectos - Pygame (Glow / Cursor)")
+    clock = pg.time.Clock()
+    # custom cursor surface (simple colored circle) or load file if present
+    cursor_surf = pg.Surface((28,28), pg.SRCALPHA)
+    pg.draw.circle(cursor_surf, (255,200,0,255), (14,14), 8)
+    pg.draw.circle(cursor_surf, (255,255,255,120), (14,14), 14, 2)
+    pg.mouse.set_visible(False)
+    # load repos (synchronously for simplicity)
+    names = fetch_repo_list_quick()
+    details = [fetch_repo_details(n) for n in names]
+    # layout cards in grid
+    cards = []
+    cols = 3
+    pad = 18
+    card_w = (W - pad*(cols+1))//cols
+    card_h = 220
+    font = pg.font.SysFont(None, 20)
+    small = pg.font.SysFont(None, 16)
+    # prefetch small images to surfaces (best-effort)
+    for idx, d in enumerate(details):
+        surf = pg.Surface((card_w, card_h), pg.SRCALPHA)
+        # draw bg
+        surf.fill((245,245,246))
+        # fetch image content for splash/icon
+        img_surf = None
+        url = d.get("splash") or d.get("icon") or ""
+        if url:
+            try:
+                resp = requests.get(url, timeout=6)
+                if resp.ok:
+                    img_file = io.BytesIO(resp.content)
+                    img = pg.image.load(img_file).convert()
+                    img = pg.transform.smoothscale(img, (card_w, 110))
+                    surf.blit(img, (0,0))
+            except Exception:
+                pass
+        # store label text, position to be set later
+        cards.append({"info": d, "surf": surf, "rect": pg.Rect(pad + (idx%cols)*(card_w+pad), pad + (idx//cols)*(card_h+pad), card_w, card_h)})
+    # state
+    running = True
+    download_tasks = []  # list of dicts: {repo_name, percent, status}
+    selected = None
+    def spawn_download(repo):
+        task = {"repo": repo, "percent":0, "status":"running"}
+        download_tasks.append(task)
+        def _dl():
+            def cb(pct, d, t):
+                task["percent"] = pct
+            local, err = download_with_progress(repo["repo_zip"], repo["repo_name"], progress_callback=cb)
+            if err:
+                task["status"] = f"error: {err}"
+            else:
+                task["status"] = f"saved: {local}"
+        threading.Thread(target=_dl, daemon=True).start()
+    # main loop
+    while running:
+        for ev in pg.event.get():
+            if ev.type == pg.QUIT:
+                running = False
+            elif ev.type == pg.MOUSEBUTTONDOWN and ev.button == 1:
+                mx,my = ev.pos
+                for c in cards:
+                    if c["rect"].collidepoint(mx,my):
+                        # open preview if exists else start download
+                        info = c["info"]
+                        if info.get("preview"):
+                            webbrowser.open(info["preview"])
+                        else:
+                            spawn_download(info)
+        # draw background
+        screen.fill((246,247,248))
+        # draw cards with glow effect behind hovered
+        mx,my = pg.mouse.get_pos()
+        for c in cards:
+            r = c["rect"]
+            hovered = r.collidepoint(mx,my)
+            # glow: draw blurred rect (approx by translucent border)
+            if hovered:
+                glow_col = (9,105,218,80)
+                glow_s = pg.Surface((r.w+20, r.h+20), pg.SRCALPHA)
+                pygame = pg  # alias
+                pygame.draw.rect(glow_s, glow_col, glow_s.get_rect(), border_radius=10)
+                screen.blit(glow_s, (r.x-10, r.y-10), special_flags=pg.BLEND_RGBA_ADD)
+            # draw card background
+            card_bg = pg.Surface((r.w, r.h))
+            card_bg.fill((255,255,255))
+            screen.blit(card_bg, (r.x, r.y))
+            # border
+            pg.draw.rect(screen, (208,215,222), r, 1, border_radius=8)
+            # draw top image from surf if available
+            surf = c["surf"]
+            screen.blit(surf, (r.x, r.y))
+            # draw title
+            t = font.render(c["info"]["display_name"], True, (9,105,218))
+            screen.blit(t, (r.x+8, r.y + 120))
+            cat = small.render(c["info"]["category"], True, (110,119,129))
+            screen.blit(cat, (r.x+8, r.y + 146))
+            # draw buttons rects
+            btn_w = 90; btn_h = 28
+            bx = r.x + r.w - btn_w - 10
+            by = r.y + r.h - btn_h - 10
+            btn_rect = pg.Rect(bx, by, btn_w, btn_h)
+            pg.draw.rect(screen, (240,240,241), btn_rect, border_radius=6)
+            pg.draw.rect(screen, (27,31,36,40), btn_rect, 1, border_radius=6)
+            btn_label = small.render("Descargar", True, (0,0,0))
+            screen.blit(btn_label, (bx+10, by+6))
+        # draw downloads overlay
+        y = H - 80
+        for t in download_tasks[-3:]:
+            txt = f"{t['repo']['repo_name']} - {t.get('percent',0)}% - {t.get('status','')}"
+            lbl = small.render(txt, True, (30,30,30))
+            screen.blit(lbl, (10,y)); y += 22
+        # draw custom cursor
+        cx, cy = pg.mouse.get_pos()
+        screen.blit(cursor_surf, (cx-14, cy-14))
+        pg.display.flip()
+        clock.tick(60)
+    pg.quit()
+
+# ----------------------------
+# Console fallback
+# ----------------------------
+def run_console_fallback():
+    # try rich interactive console
+    if rich:
+        from rich.console import Console
+        console = Console()
+        console.print("[bold green]Modo consola[/]")
+        names = fetch_repo_list_quick()
+        repos = [fetch_repo_details(n) for n in names]
+        from rich.table import Table
+        t = Table()
+        t.add_column("#")
+        t.add_column("Nombre")
+        t.add_column("Categoria")
+        t.add_column("Rating")
+        for i,r in enumerate(repos,1):
+            t.add_row(str(i), r["display_name"], r["category"], str(r["rating"]))
+        console.print(t)
+        console.print("Comando: d <n> descargar / p <n> preview / q salir")
+        while True:
+            cmd = console.input(">> ")
+            if not cmd: continue
+            if cmd in ("q","exit","quit"): break
+            if cmd.startswith("d "):
+                try:
+                    idx = int(cmd.split()[1]) - 1
+                    repo = repos[idx]
+                    console.print(f"Descargando {repo['repo_name']} ...")
+                    download_with_progress(repo["repo_zip"], repo["repo_name"], progress_callback=lambda pct,d,t: console.print(f"{pct}%"),)
+                except Exception as e:
+                    console.print("[red]Error[/]", e)
+            if cmd.startswith("p "):
+                try:
+                    idx = int(cmd.split()[1]) - 1
+                    repo = repos[idx]
+                    if repo.get("preview"):
+                        webbrowser.open(repo["preview"])
+                    else:
+                        console.print("[yellow]No hay preview[/]")
+                except Exception as e:
+                    console.print("[red]Error[/]", e)
+    else:
+        print("Consola simple:")
+        names = fetch_repo_list_quick()
+        for i,n in enumerate(names,1):
+            print(i, n)
+        print("Abrir en navegador: https://jesusquijada34.github.io/")
+
+# ----------------------------
+# Main launcher
+# ----------------------------
+def main():
+    # prefer Pygame if forced
+    if USE_PYGAME:
+        try:
+            run_pygame_mode()
+            return
+        except Exception as e:
+            print("Error modo Pygame:", e)
+    # try PySide6 GUI first
+    try:
+        run_pyside6_gui()
+        return
+    except Exception as e:
+        print("PySide6 GUI no disponible o falló:", e)
+    # If PySide6 failed, try pygame if available
+    if pygame:
+        try:
+            run_pygame_mode()
+            return
+        except Exception as e:
+            print("Pygame fallback falló:", e)
+    # else try webview
+    if pywebview:
+        try:
+            import webview
+            webview.create_window("Proyectos - web", "https://jesusquijada34.github.io/")
+            webview.start()
+            return
+        except Exception as e:
+            print("webview fallback falló:", e)
+    # else console
+    run_console_fallback()
 
 if __name__ == "__main__":
-    # helper widgets referenced in code
-    from kivy.uix.button import Button
-    class ButtonLikeRanking(Button):
-        repo = None
-
-    # register ProjectCard rule so KV can instantiate <Card> as ProjectCard
-    from kivy.factory import Factory
-    Factory.register('ProjectCard', cls=ProjectCard)
-
-    ProjectsApp().run()
+    main()
