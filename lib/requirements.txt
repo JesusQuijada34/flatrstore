@@ -5,3 +5,6 @@ markdown==3.5.1
 python-dotenv==1.0.0
 winshell==1.0.0
 pywin32==306; sys_platform == 'win32'
+PySide6
+requests
+plyer
